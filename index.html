@@ -933,7 +933,7 @@
 
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
-        import { getDatabase, ref, set, get, onValue, push, remove, update, onDisconnect } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js';
+        import { getDatabase, ref, set, get, onValue, push, remove, update, onDisconnect, off } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js';
 
         const firebaseConfig = {
             apiKey: "AIzaSyBdxd54oFM3eWH1duC5BTdJzjGGRDLMq-Q",
@@ -961,8 +961,9 @@
             maxMistakes: 6,
             gameStatus: 'waiting',
             players: {},
-            roomListener: null,
-            chatListener: null
+            roomListenerUnsubscribe: null,
+            chatListenerUnsubscribe: null,
+            isProcessing: false
         };
 
         const audioSystem = {
@@ -986,14 +987,18 @@
                 
                 const tryPlay = () => {
                     if (!this.isMuted && this.bgMusic.paused) {
-                        this.bgMusic.play().catch(e => console.log('Autoplay bloqueado, clique para ativar'));
+                        this.bgMusic.play().catch(e => console.log('🎵 Autoplay bloqueado'));
                     }
                 };
                 
                 document.addEventListener('click', tryPlay, { once: true });
                 document.addEventListener('keydown', tryPlay, { once: true });
                 
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                try {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.log('🔇 AudioContext não disponível');
+                }
             },
             
             toggle() {
@@ -1015,56 +1020,75 @@
             playSound(type) {
                 if (this.isMuted || !this.audioContext) return;
                 
-                const osc = this.audioContext.createOscillator();
-                const gain = this.audioContext.createGain();
-                osc.connect(gain);
-                gain.connect(this.audioContext.destination);
-                
-                const now = this.audioContext.currentTime;
-                
-                switch(type) {
-                    case 'correct':
-                        osc.frequency.value = 800;
-                        gain.gain.setValueAtTime(0.3, now);
-                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-                        osc.start(now);
-                        osc.stop(now + 0.15);
-                        break;
-                    case 'wrong':
-                        osc.frequency.value = 150;
-                        gain.gain.setValueAtTime(0.25, now);
-                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
-                        osc.start(now);
-                        osc.stop(now + 0.3);
-                        break;
-                    case 'victory':
-                        [600, 750, 900].forEach((freq, i) => {
-                            setTimeout(() => {
-                                const o = this.audioContext.createOscillator();
-                                const g = this.audioContext.createGain();
-                                o.connect(g);
-                                g.connect(this.audioContext.destination);
-                                o.frequency.value = freq;
-                                const t = this.audioContext.currentTime;
-                                g.gain.setValueAtTime(0.2, t);
-                                g.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
-                                o.start(t);
-                                o.stop(t + 0.2);
-                            }, i * 120);
-                        });
-                        break;
-                    case 'defeat':
-                        osc.frequency.value = 100;
-                        gain.gain.setValueAtTime(0.3, now);
-                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
-                        osc.start(now);
-                        osc.stop(now + 0.6);
-                        break;
+                try {
+                    const osc = this.audioContext.createOscillator();
+                    const gain = this.audioContext.createGain();
+                    osc.connect(gain);
+                    gain.connect(this.audioContext.destination);
+                    
+                    const now = this.audioContext.currentTime;
+                    
+                    switch(type) {
+                        case 'correct':
+                            osc.frequency.value = 800;
+                            gain.gain.setValueAtTime(0.3, now);
+                            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                            osc.start(now);
+                            osc.stop(now + 0.15);
+                            break;
+                        case 'wrong':
+                            osc.frequency.value = 150;
+                            gain.gain.setValueAtTime(0.25, now);
+                            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                            osc.start(now);
+                            osc.stop(now + 0.3);
+                            break;
+                        case 'victory':
+                            [600, 750, 900].forEach((freq, i) => {
+                                setTimeout(() => {
+                                    const o = this.audioContext.createOscillator();
+                                    const g = this.audioContext.createGain();
+                                    o.connect(g);
+                                    g.connect(this.audioContext.destination);
+                                    o.frequency.value = freq;
+                                    const t = this.audioContext.currentTime;
+                                    g.gain.setValueAtTime(0.2, t);
+                                    g.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+                                    o.start(t);
+                                    o.stop(t + 0.2);
+                                }, i * 120);
+                            });
+                            break;
+                        case 'defeat':
+                            osc.frequency.value = 100;
+                            gain.gain.setValueAtTime(0.3, now);
+                            gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+                            osc.start(now);
+                            osc.stop(now + 0.6);
+                            break;
+                    }
+                } catch (e) {
+                    console.log('Erro ao tocar som:', e);
                 }
             }
         };
 
+        // Função auxiliar para limpar listeners
+        function cleanupListeners() {
+            if (gameState.roomListenerUnsubscribe) {
+                gameState.roomListenerUnsubscribe();
+                gameState.roomListenerUnsubscribe = null;
+                console.log('🧹 Room listener removido');
+            }
+            if (gameState.chatListenerUnsubscribe) {
+                gameState.chatListenerUnsubscribe();
+                gameState.chatListenerUnsubscribe = null;
+                console.log('🧹 Chat listener removido');
+            }
+        }
+
         function showScreen(screenId) {
+            console.log(`📺 Mudando para tela: ${screenId}`);
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.getElementById(screenId).classList.add('active');
         }
@@ -1082,9 +1106,13 @@
         }
 
         async function createRoom() {
+            if (gameState.isProcessing) return;
+            gameState.isProcessing = true;
+
             const playerName = document.getElementById('playerNameInput').value.trim();
             if (!playerName) {
                 alert('Por favor, digite seu nome!');
+                gameState.isProcessing = false;
                 return;
             }
 
@@ -1096,6 +1124,8 @@
             const roomRef = ref(database, `rooms/${gameState.roomId}`);
             
             try {
+                console.log(`🎮 Criando sala: ${gameState.roomId}`);
+                
                 await set(roomRef, {
                     host: {
                         id: gameState.playerId,
@@ -1117,31 +1147,55 @@
                 document.getElementById('displayRoomId').textContent = gameState.roomId;
                 showScreen('waitingRoomScreen');
 
-                gameState.roomListener = onValue(roomRef, (snapshot) => {
+                // Setup listener para aguardar guest
+                const unsubscribe = onValue(roomRef, (snapshot) => {
                     const data = snapshot.val();
-                    if (data && data.guest && data.status === 'waiting') {
+                    
+                    if (!data) {
+                        console.log('⚠️ Sala removida');
+                        cleanupListeners();
+                        return;
+                    }
+
+                    console.log('📡 Atualização da sala:', data.status, 'Guest:', !!data.guest);
+                    
+                    // Quando guest entrar, mover para tela de definir palavra
+                    if (data.guest && !gameState.roomListenerUnsubscribe) {
+                        console.log('✅ Guest entrou! Movendo para setWordScreen');
+                        cleanupListeners();
+                        gameState.roomListenerUnsubscribe = unsubscribe;
                         showScreen('setWordScreen');
                         document.getElementById('wordInput').value = '';
                         document.getElementById('wordInput').focus();
                     }
                 });
+
+                gameState.roomListenerUnsubscribe = unsubscribe;
+
             } catch (error) {
-                console.error('Erro ao criar sala:', error);
+                console.error('❌ Erro ao criar sala:', error);
                 alert('Erro ao criar sala. Tente novamente.');
+            } finally {
+                gameState.isProcessing = false;
             }
         }
 
         async function joinRoom() {
+            if (gameState.isProcessing) return;
+            gameState.isProcessing = true;
+
             const playerName = document.getElementById('playerNameInput').value.trim();
             const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
             
             if (!playerName) {
                 alert('Por favor, digite seu nome!');
+                gameState.isProcessing = false;
                 return;
             }
             
             if (!roomId) {
                 alert('Por favor, digite o ID da sala!');
+                gameState.isProcessing = false;
                 return;
             }
 
@@ -1153,10 +1207,13 @@
             const roomRef = ref(database, `rooms/${roomId}`);
             
             try {
+                console.log(`🚪 Entrando na sala: ${roomId}`);
+                
                 const snapshot = await get(roomRef);
 
                 if (!snapshot.exists()) {
                     alert('Sala não encontrada! Verifique o ID.');
+                    gameState.isProcessing = false;
                     return;
                 }
 
@@ -1164,11 +1221,13 @@
                 
                 if (roomData.guest) {
                     alert('Esta sala já está cheia!');
+                    gameState.isProcessing = false;
                     return;
                 }
 
                 if (roomData.status !== 'waiting') {
                     alert('Esta sala já está em jogo!');
+                    gameState.isProcessing = false;
                     return;
                 }
 
@@ -1181,30 +1240,41 @@
                     status: 'settingWord'
                 });
 
+                console.log('✅ Entrou na sala como guest');
+                
                 startGameListeners();
                 showScreen('gameScreen');
                 renderWaitingForWord();
+
             } catch (error) {
-                console.error('Erro ao entrar na sala:', error);
+                console.error('❌ Erro ao entrar na sala:', error);
                 alert('Erro ao entrar na sala. Tente novamente.');
+            } finally {
+                gameState.isProcessing = false;
             }
         }
 
         async function setWord() {
+            if (gameState.isProcessing) return;
+            gameState.isProcessing = true;
+
             const word = document.getElementById('wordInput').value.trim().toUpperCase();
             
             if (!word) {
                 alert('Digite uma palavra!');
+                gameState.isProcessing = false;
                 return;
             }
 
             if (!validateWord(word)) {
                 alert('Use apenas letras (sem números ou símbolos)!');
+                gameState.isProcessing = false;
                 return;
             }
 
             if (word.length < 3) {
                 alert('A palavra deve ter pelo menos 3 letras!');
+                gameState.isProcessing = false;
                 return;
             }
 
@@ -1214,6 +1284,8 @@
             const roomRef = ref(database, `rooms/${gameState.roomId}`);
             
             try {
+                console.log(`📝 Definindo palavra: ${word.length} letras`);
+                
                 await update(roomRef, {
                     word: word,
                     maskedWord: maskedWord,
@@ -1223,29 +1295,37 @@
                     winner: null
                 });
 
+                console.log('✅ Palavra definida, iniciando jogo');
+                
                 startGameListeners();
                 showScreen('gameScreen');
+
             } catch (error) {
-                console.error('Erro ao definir palavra:', error);
+                console.error('❌ Erro ao definir palavra:', error);
                 alert('Erro ao iniciar jogo. Tente novamente.');
+            } finally {
+                gameState.isProcessing = false;
             }
         }
 
         function startGameListeners() {
+            // Limpar listeners existentes primeiro
+            cleanupListeners();
+            
             const roomRef = ref(database, `rooms/${gameState.roomId}`);
             
-            if (gameState.roomListener) {
-                // Listener já existe, não cria outro
-                return;
-            }
+            console.log('🎧 Iniciando game listeners');
             
-            gameState.roomListener = onValue(roomRef, (snapshot) => {
+            const roomUnsubscribe = onValue(roomRef, (snapshot) => {
                 const data = snapshot.val();
                 if (!data) {
+                    console.log('⚠️ Sala não existe mais');
                     alert('Sala encerrada!');
                     returnToHome();
                     return;
                 }
+
+                console.log('📡 Game update:', data.status);
 
                 gameState.players = {
                     host: data.host,
@@ -1260,18 +1340,24 @@
                 updateGameUI();
 
                 if (data.status === 'finished' && data.winner) {
+                    console.log('🏁 Jogo finalizado, vencedor:', data.winner);
                     showResultModal(data.winner, data.word);
                 }
             });
 
+            gameState.roomListenerUnsubscribe = roomUnsubscribe;
+
+            // Chat listener
             const chatRef = ref(database, `chats/${gameState.roomId}`);
-            gameState.chatListener = onValue(chatRef, (snapshot) => {
+            const chatUnsubscribe = onValue(chatRef, (snapshot) => {
                 const messages = [];
                 snapshot.forEach((child) => {
                     messages.push(child.val());
                 });
                 renderChat(messages);
             });
+
+            gameState.chatListenerUnsubscribe = chatUnsubscribe;
         }
 
         function updateGameUI() {
@@ -1290,6 +1376,7 @@
                 document.getElementById('player2Score').textContent = `${guest.score || 0} pts`;
             }
 
+            // Destacar jogador atual
             if (gameState.role === 'guest') {
                 document.getElementById('player2Card').classList.add('current');
                 document.getElementById('player1Card').classList.remove('current');
@@ -1320,7 +1407,7 @@
 
         function renderWaitingForWord() {
             const container = document.getElementById('wordLetters');
-            container.innerHTML = '<p style="color: #00ffff; font-size: 1.3rem; padding: 20px;">Aguardando o oponente definir a palavra...</p>';
+            container.innerHTML = '<p style="color: #00ffff; font-size: 1.3rem; padding: 20px;">⏳ Aguardando o oponente definir a palavra...</p>';
             document.getElementById('keyboard').innerHTML = '';
             document.getElementById('mistakesCount').textContent = '0';
             updateHangman();
@@ -1351,6 +1438,7 @@
                     }
                 }
 
+                // Apenas guest pode jogar durante o status 'playing'
                 if (gameState.role === 'guest' && gameState.gameStatus === 'playing') {
                     btn.addEventListener('click', () => makeGuess(letter));
                 } else {
@@ -1362,17 +1450,23 @@
         }
 
         async function makeGuess(letter) {
+            if (gameState.isProcessing) return;
+            gameState.isProcessing = true;
+
             const normalizedLetter = normalizeText(letter);
             const guessedNormalized = gameState.guessedLetters.map(l => normalizeText(l));
             
-            if (guessedNormalized.includes(normalizedLetter)) return;
+            if (guessedNormalized.includes(normalizedLetter)) {
+                gameState.isProcessing = false;
+                return;
+            }
+
+            console.log(`🎯 Tentativa: ${letter}`);
 
             const newGuessedLetters = [...gameState.guessedLetters, letter];
             let newMaskedWord = [...gameState.maskedWord];
             let newMistakes = gameState.mistakes;
             let isCorrect = false;
-
-            const wordNormalized = normalizeText(gameState.currentWord);
             
             for (let i = 0; i < gameState.currentWord.length; i++) {
                 if (normalizeText(gameState.currentWord[i]) === normalizedLetter) {
@@ -1384,14 +1478,17 @@
             if (!isCorrect) {
                 newMistakes++;
                 audioSystem.playSound('wrong');
+                console.log(`❌ Erro! Total de erros: ${newMistakes}`);
             } else {
                 audioSystem.playSound('correct');
+                console.log(`✅ Acerto!`);
             }
 
             const roomRef = ref(database, `rooms/${gameState.roomId}`);
             
             try {
                 if (!newMaskedWord.includes('_')) {
+                    console.log('🎉 Palavra completada! Guest venceu!');
                     audioSystem.playSound('victory');
                     await update(roomRef, {
                         guessedLetters: newGuessedLetters,
@@ -1402,6 +1499,7 @@
                     });
                     await updateScore('guest', 10);
                 } else if (newMistakes >= gameState.maxMistakes) {
+                    console.log('💀 Máximo de erros atingido! Host venceu!');
                     audioSystem.playSound('defeat');
                     await update(roomRef, {
                         guessedLetters: newGuessedLetters,
@@ -1419,7 +1517,9 @@
                     });
                 }
             } catch (error) {
-                console.error('Erro ao fazer jogada:', error);
+                console.error('❌ Erro ao fazer jogada:', error);
+            } finally {
+                gameState.isProcessing = false;
             }
         }
 
@@ -1451,7 +1551,7 @@
                     await updateGlobalRanking(data.guest.name, points);
                 }
             } catch (error) {
-                console.error('Erro ao atualizar pontuação:', error);
+                console.error('❌ Erro ao atualizar pontuação:', error);
             }
         }
 
@@ -1469,6 +1569,7 @@
                         score: currentScore + points,
                         lastPlayed: Date.now()
                     });
+                    console.log(`📊 Ranking atualizado: ${playerName} +${points} pts`);
                 } else {
                     const newPlayerRef = push(rankingRef);
                     await set(newPlayerRef, {
@@ -1477,9 +1578,10 @@
                         timestamp: Date.now(),
                         lastPlayed: Date.now()
                     });
+                    console.log(`📊 Novo jogador no ranking: ${playerName}`);
                 }
             } catch (error) {
-                console.error('Erro ao atualizar ranking:', error);
+                console.error('❌ Erro ao atualizar ranking:', error);
             }
         }
 
@@ -1501,11 +1603,17 @@
         }
 
         async function playAgain() {
+            if (gameState.isProcessing) return;
+            gameState.isProcessing = true;
+
             document.getElementById('resultModal').classList.remove('active');
             
             const roomRef = ref(database, `rooms/${gameState.roomId}`);
             
             try {
+                console.log('🔄 Iniciando nova rodada');
+                
+                // Inverter papéis: agora o guest define a palavra
                 if (gameState.role === 'guest') {
                     await update(roomRef, {
                         status: 'settingWordGuest',
@@ -1515,10 +1623,15 @@
                         mistakes: 0,
                         winner: null
                     });
+                    
+                    // Guest vai definir a palavra
+                    cleanupListeners();
                     showScreen('setWordScreen');
                     document.getElementById('wordInput').value = '';
                     document.getElementById('wordInput').focus();
+                    
                 } else {
+                    // Host aguarda guest definir palavra
                     await update(roomRef, {
                         status: 'waitingForGuest',
                         word: null,
@@ -1527,10 +1640,26 @@
                         mistakes: 0,
                         winner: null
                     });
+                    
+                    showScreen('gameScreen');
                     renderWaitingForWord();
+                    
+                    // Listener para aguardar palavra do guest
+                    const unsubscribe = onValue(roomRef, (snapshot) => {
+                        const data = snapshot.val();
+                        if (data && data.status === 'playing' && data.word) {
+                            console.log('✅ Palavra definida pelo guest, jogo iniciado');
+                            cleanupListeners();
+                            startGameListeners();
+                        }
+                    });
+                    
+                    gameState.roomListenerUnsubscribe = unsubscribe;
                 }
             } catch (error) {
-                console.error('Erro ao reiniciar jogo:', error);
+                console.error('❌ Erro ao reiniciar jogo:', error);
+            } finally {
+                gameState.isProcessing = false;
             }
         }
 
@@ -1551,7 +1680,7 @@
 
                 input.value = '';
             } catch (error) {
-                console.error('Erro ao enviar mensagem:', error);
+                console.error('❌ Erro ao enviar mensagem:', error);
             }
         }
 
@@ -1577,6 +1706,10 @@
         }
 
         async function leaveRoom() {
+            console.log('👋 Saindo da sala');
+            
+            cleanupListeners();
+            
             if (gameState.roomId) {
                 try {
                     const roomRef = ref(database, `rooms/${gameState.roomId}`);
@@ -1585,18 +1718,22 @@
                     const chatRef = ref(database, `chats/${gameState.roomId}`);
                     await remove(chatRef);
                 } catch (error) {
-                    console.error('Erro ao sair da sala:', error);
+                    console.error('❌ Erro ao sair da sala:', error);
                 }
             }
             returnToHome();
         }
 
         function returnToHome() {
+            console.log('🏠 Retornando à tela inicial');
+            
+            cleanupListeners();
+            
             gameState.roomId = null;
             gameState.playerId = null;
             gameState.role = null;
-            gameState.roomListener = null;
-            gameState.chatListener = null;
+            gameState.isProcessing = false;
+            
             document.getElementById('resultModal').classList.remove('active');
             document.getElementById('playerNameInput').value = gameState.playerName;
             showScreen('homeScreen');
@@ -1634,7 +1771,7 @@
                     container.appendChild(div);
                 });
             } catch (error) {
-                console.error('Erro ao carregar ranking:', error);
+                console.error('❌ Erro ao carregar ranking:', error);
                 container.innerHTML = '<p class="text-center" style="color: #ff0055;">Erro ao carregar ranking.</p>';
             }
         }
@@ -1650,7 +1787,10 @@
         document.getElementById('confirmJoinBtn').addEventListener('click', joinRoom);
         document.getElementById('backFromJoinBtn').addEventListener('click', () => showScreen('homeScreen'));
         document.getElementById('backFromRankingBtn').addEventListener('click', () => showScreen('homeScreen'));
-        document.getElementById('cancelRoomBtn').addEventListener('click', leaveRoom);
+        document.getElementById('cancelRoomBtn').addEventListener('click', () => {
+            cleanupListeners();
+            leaveRoom();
+        });
         document.getElementById('confirmWordBtn').addEventListener('click', setWord);
         document.getElementById('leaveGameBtn').addEventListener('click', () => {
             if (confirm('Tem certeza que deseja sair da sala?')) {
@@ -1671,6 +1811,7 @@
         audioSystem.init();
         console.log('🎮 Jogo da Forca Online carregado!');
         console.log('🔥 Firebase:', database ? 'Conectado ✅' : 'Erro ❌');
+        console.log('📝 Versão: 2.0 - Sistema de listeners otimizado');
     </script>
 </body>
 </html>
