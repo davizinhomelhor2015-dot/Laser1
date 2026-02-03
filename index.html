@@ -1106,79 +1106,80 @@
         }
 
         async function createRoom() {
-            if (gameState.isProcessing) return;
-            gameState.isProcessing = true;
+    if (gameState.isProcessing) return;
+    gameState.isProcessing = true;
 
-            const playerName = document.getElementById('playerNameInput').value.trim();
-            if (!playerName) {
-                alert('Por favor, digite seu nome!');
-                gameState.isProcessing = false;
+    const playerName = document.getElementById('playerNameInput').value.trim();
+    if (!playerName) {
+        alert('Por favor, digite seu nome!');
+        gameState.isProcessing = false;
+        return;
+    }
+
+    gameState.playerName = playerName;
+    gameState.playerId = 'host_' + Date.now();
+    gameState.roomId = generateRoomId();
+    gameState.role = 'host';
+
+    const roomRef = ref(database, `rooms/${gameState.roomId}`);
+    
+    try {
+        console.log(`🎮 Criando sala: ${gameState.roomId}`);
+        
+        await set(roomRef, {
+            host: {
+                id: gameState.playerId,
+                name: playerName,
+                score: 0
+            },
+            guest: null,
+            status: 'waiting',
+            word: null,
+            maskedWord: null,
+            guessedLetters: [],
+            mistakes: 0,
+            round: 1,
+            createdAt: Date.now()
+        });
+
+        onDisconnect(roomRef).remove();
+
+        document.getElementById('displayRoomId').textContent = gameState.roomId;
+        showScreen('waitingRoomScreen');
+
+        // Listener para aguardar guest
+        const unsubscribe = onValue(roomRef, (snapshot) => {
+            const data = snapshot.val();
+            
+            if (!data) {
+                console.log('⚠️ Sala removida');
+                cleanupListeners();
                 return;
             }
 
-            gameState.playerName = playerName;
-            gameState.playerId = 'host_' + Date.now();
-            gameState.roomId = generateRoomId();
-            gameState.role = 'host';
-
-            const roomRef = ref(database, `rooms/${gameState.roomId}`);
+            console.log('📡 Atualização da sala:', data.status, 'Guest:', !!data.guest);
             
-            try {
-                console.log(`🎮 Criando sala: ${gameState.roomId}`);
-                
-                await set(roomRef, {
-                    host: {
-                        id: gameState.playerId,
-                        name: playerName,
-                        score: 0
-                    },
-                    guest: null,
-                    status: 'waiting',
-                    word: null,
-                    maskedWord: null,
-                    guessedLetters: [],
-                    mistakes: 0,
-                    round: 1,
-                    createdAt: Date.now()
-                });
+            // Quando guest entrar e status indicar que deve definir palavra
+            if (data.guest && data.status === 'settingWord') {
+                console.log('✅ Guest entrou! Movendo para setWordScreen');
+                showScreen('setWordScreen');
+                document.getElementById('wordInput').value = '';
+                document.getElementById('wordInput').focus();
 
-                onDisconnect(roomRef).remove();
-
-                document.getElementById('displayRoomId').textContent = gameState.roomId;
-                showScreen('waitingRoomScreen');
-
-                // Setup listener para aguardar guest
-                const unsubscribe = onValue(roomRef, (snapshot) => {
-                    const data = snapshot.val();
-                    
-                    if (!data) {
-                        console.log('⚠️ Sala removida');
-                        cleanupListeners();
-                        return;
-                    }
-
-                    console.log('📡 Atualização da sala:', data.status, 'Guest:', !!data.guest);
-                    
-                    // Quando guest entrar, mover para tela de definir palavra
-                    if (data.guest && !gameState.roomListenerUnsubscribe) {
-                        console.log('✅ Guest entrou! Movendo para setWordScreen');
-                        cleanupListeners();
-                        gameState.roomListenerUnsubscribe = unsubscribe;
-                        showScreen('setWordScreen');
-                        document.getElementById('wordInput').value = '';
-                        document.getElementById('wordInput').focus();
-                    }
-                });
-
+                // Agora sim, salvar unsubscribe
                 gameState.roomListenerUnsubscribe = unsubscribe;
-
-            } catch (error) {
-                console.error('❌ Erro ao criar sala:', error);
-                alert('Erro ao criar sala. Tente novamente.');
-            } finally {
-                gameState.isProcessing = false;
             }
-        }
+        });
+
+        // Temporariamente ainda não atribuímos unsubscribe
+        // Ele só será salvo quando o guest entrar
+    } catch (error) {
+        console.error('❌ Erro ao criar sala:', error);
+        alert('Erro ao criar sala. Tente novamente.');
+    } finally {
+        gameState.isProcessing = false;
+    }
+}
 
         async function joinRoom() {
             if (gameState.isProcessing) return;
@@ -1603,65 +1604,62 @@
         }
 
         async function playAgain() {
-            if (gameState.isProcessing) return;
-            gameState.isProcessing = true;
+    if (gameState.isProcessing) return;
+    gameState.isProcessing = true;
 
-            document.getElementById('resultModal').classList.remove('active');
+    document.getElementById('resultModal').classList.remove('active');
+    
+    const roomRef = ref(database, `rooms/${gameState.roomId}`);
+    
+    try {
+        console.log('🔄 Iniciando nova rodada');
+        
+        if (gameState.role === 'guest') {
+            // Guest define a palavra
+            await update(roomRef, {
+                status: 'settingWordGuest',
+                word: null,
+                maskedWord: [],
+                guessedLetters: [],
+                mistakes: 0,
+                winner: null
+            });
+
+            cleanupListeners();
+            showScreen('setWordScreen');
+            document.getElementById('wordInput').value = '';
+            document.getElementById('wordInput').focus();
             
-            const roomRef = ref(database, `rooms/${gameState.roomId}`);
-            
-            try {
-                console.log('🔄 Iniciando nova rodada');
-                
-                // Inverter papéis: agora o guest define a palavra
-                if (gameState.role === 'guest') {
-                    await update(roomRef, {
-                        status: 'settingWordGuest',
-                        word: null,
-                        maskedWord: [],
-                        guessedLetters: [],
-                        mistakes: 0,
-                        winner: null
-                    });
-                    
-                    // Guest vai definir a palavra
-                    cleanupListeners();
-                    showScreen('setWordScreen');
-                    document.getElementById('wordInput').value = '';
-                    document.getElementById('wordInput').focus();
-                    
-                } else {
-                    // Host aguarda guest definir palavra
-                    await update(roomRef, {
-                        status: 'waitingForGuest',
-                        word: null,
-                        maskedWord: [],
-                        guessedLetters: [],
-                        mistakes: 0,
-                        winner: null
-                    });
-                    
-                    showScreen('gameScreen');
-                    renderWaitingForWord();
-                    
-                    // Listener para aguardar palavra do guest
-                    const unsubscribe = onValue(roomRef, (snapshot) => {
-                        const data = snapshot.val();
-                        if (data && data.status === 'playing' && data.word) {
-                            console.log('✅ Palavra definida pelo guest, jogo iniciado');
-                            cleanupListeners();
-                            startGameListeners();
-                        }
-                    });
-                    
+        } else {
+            // Host aguarda guest definir palavra
+            await update(roomRef, {
+                status: 'waitingForGuest',
+                word: null,
+                maskedWord: [],
+                guessedLetters: [],
+                mistakes: 0,
+                winner: null
+            });
+
+            showScreen('gameScreen');
+            renderWaitingForWord();
+
+            // Listener para aguardar palavra do guest
+            const unsubscribe = onValue(roomRef, (snapshot) => {
+                const data = snapshot.val();
+                if (data && data.status === 'playing' && data.word) {
+                    console.log('✅ Palavra definida pelo guest, jogo iniciado');
+                    startGameListeners(); // inicia os listeners do jogo
                     gameState.roomListenerUnsubscribe = unsubscribe;
                 }
-            } catch (error) {
-                console.error('❌ Erro ao reiniciar jogo:', error);
-            } finally {
-                gameState.isProcessing = false;
-            }
+            });
         }
+    } catch (error) {
+        console.error('❌ Erro ao reiniciar jogo:', error);
+    } finally {
+        gameState.isProcessing = false;
+    }
+}
 
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
