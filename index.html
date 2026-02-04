@@ -1620,10 +1620,16 @@ await update(roomRef, {
     
     try {
         console.log('🔄 Iniciando nova rodada');
-        
-        // Alternar status de quem define a palavra
-        const newStatus = (gameState.role === 'host') ? 'settingWordGuest' : 'settingWordHost';
-        
+
+        // Alternar quem define a palavra
+        let newStatus;
+        if (gameState.role === 'host') {
+            newStatus = 'settingWordHost'; // agora host define palavra
+        } else {
+            newStatus = 'settingWordGuest'; // agora guest define palavra
+        }
+
+        // Atualiza Firebase: limpa palavra, mascaramento, letras e erros
         await update(roomRef, {
             status: newStatus,
             word: null,
@@ -1633,29 +1639,37 @@ await update(roomRef, {
             winner: null
         });
 
+        // Limpa listeners antigos
         cleanupListeners();
-        
-        if (gameState.role === 'host') {
-            // Host aguarda guest definir palavra
+
+        // Atualiza gameState local
+        gameState.currentWord = '';
+        gameState.maskedWord = [];
+        gameState.guessedLetters = [];
+        gameState.mistakes = 0;
+        gameState.gameStatus = newStatus;
+
+        if ((gameState.role === 'host' && newStatus === 'settingWordHost') ||
+            (gameState.role === 'guest' && newStatus === 'settingWordGuest')) {
+            // jogador da vez define a palavra
+            showScreen('setWordScreen');
+            document.getElementById('wordInput').value = '';
+            document.getElementById('wordInput').focus();
+        } else {
+            // jogador que adivinha espera
             showScreen('gameScreen');
             renderWaitingForWord();
 
             const unsubscribe = onValue(roomRef, (snapshot) => {
                 const data = snapshot.val();
                 if (data && data.status === 'playing' && data.word) {
-                    console.log('✅ Palavra definida pelo guest, jogo iniciado');
+                    console.log('✅ Palavra definida, jogo iniciado');
                     cleanupListeners();
                     startGameListeners();
                 }
             });
 
             gameState.roomListenerUnsubscribe = unsubscribe;
-
-        } else {
-            // Guest define palavra
-            showScreen('setWordScreen');
-            document.getElementById('wordInput').value = '';
-            document.getElementById('wordInput').focus();
         }
 
     } catch (error) {
@@ -1664,6 +1678,7 @@ await update(roomRef, {
         gameState.isProcessing = false;
     }
 }
+
 
 
         async function sendChatMessage() {
