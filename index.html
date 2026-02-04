@@ -1294,14 +1294,18 @@ await update(roomRef, {
             try {
                 console.log(`📝 Definindo palavra: ${word.length} letras`);
                 
-                await update(roomRef, {
-                    word: word,
-                    maskedWord: maskedWord,
-                    guessedLetters: [],
-                    mistakes: 0,
-                    status: 'playing',
-                    winner: null
-                });
+                const guesser = (gameState.role === 'host') ? 'guest' : 'host';
+
+await update(roomRef, {
+    word: word,
+    maskedWord: maskedWord,
+    guessedLetters: [],
+    mistakes: 0,
+    status: 'playing',
+    winner: null,
+    wordSetter: gameState.role,
+    currentGuesser: guesser
+});
 
                 console.log('✅ Palavra definida, iniciando jogo');
                 
@@ -1344,6 +1348,8 @@ await update(roomRef, {
                 gameState.guessedLetters = data.guessedLetters || [];
                 gameState.mistakes = data.mistakes || 0;
                 gameState.gameStatus = data.status;
+gameState.currentGuesser = data.currentGuesser || null;
+gameState.wordSetter = data.wordSetter || null;
 
                 updateGameUI();
 
@@ -1446,12 +1452,12 @@ await update(roomRef, {
                     }
                 }
 
-                // Apenas guest pode jogar durante o status 'playing'
-                if (gameState.role === 'guest' && gameState.gameStatus === 'playing') {
-                    btn.addEventListener('click', () => makeGuess(letter));
-                } else {
-                    btn.disabled = true;
-                }
+                // Quem pode jogar é quem está adivinhando
+if (gameState.gameStatus === 'playing' && gameState.currentGuesser === gameState.role) {
+    btn.addEventListener('click', () => makeGuess(letter));
+} else {
+    btn.disabled = true;
+}
 
                 container.appendChild(btn);
             });
@@ -1610,74 +1616,44 @@ await update(roomRef, {
             modal.classList.add('active');
         }
 
-        async function playAgain() {
-    if (gameState.isProcessing) return;
-    gameState.isProcessing = true;
+        if (gameState.isProcessing) return;
+gameState.isProcessing = true;
 
-    document.getElementById('resultModal').classList.remove('active');
-    
-    const roomRef = ref(database, `rooms/${gameState.roomId}`);
-    
-    try {
-        console.log('🔄 Iniciando nova rodada');
+document.getElementById('resultModal').classList.remove('active');
 
-        // Alternar quem define a palavra
-        let newStatus;
-        if (gameState.role === 'host') {
-            newStatus = 'settingWordHost'; // agora host define palavra
-        } else {
-            newStatus = 'settingWordGuest'; // agora guest define palavra
-        }
+const roomRef = ref(database, `rooms/${gameState.roomId}`);
 
-        // Atualiza Firebase: limpa palavra, mascaramento, letras e erros
-        await update(roomRef, {
-            status: newStatus,
-            word: null,
-            maskedWord: [],
-            guessedLetters: [],
-            mistakes: 0,
-            winner: null
-        });
+try {
+    const snap = await get(roomRef);
+    const data = snap.val();
 
-        // Limpa listeners antigos
-        cleanupListeners();
+    const lastSetter = data.wordSetter || 'host';
+    const nextSetter = lastSetter === 'host' ? 'guest' : 'host';
 
-        // Atualiza gameState local
-        gameState.currentWord = '';
-        gameState.maskedWord = [];
-        gameState.guessedLetters = [];
-        gameState.mistakes = 0;
-        gameState.gameStatus = newStatus;
+    await update(roomRef, {
+        status: 'settingWord',
+        word: null,
+        maskedWord: [],
+        guessedLetters: [],
+        mistakes: 0,
+        winner: null,
+        wordSetter: nextSetter,
+        currentGuesser: null
+    });
 
-        if ((gameState.role === 'host' && newStatus === 'settingWordHost') ||
-            (gameState.role === 'guest' && newStatus === 'settingWordGuest')) {
-            // jogador da vez define a palavra
-            showScreen('setWordScreen');
-            document.getElementById('wordInput').value = '';
-            document.getElementById('wordInput').focus();
-        } else {
-            // jogador que adivinha espera
-            showScreen('gameScreen');
-            renderWaitingForWord();
-
-            const unsubscribe = onValue(roomRef, (snapshot) => {
-                const data = snapshot.val();
-                if (data && data.status === 'playing' && data.word) {
-                    console.log('✅ Palavra definida, jogo iniciado');
-                    cleanupListeners();
-                    startGameListeners();
-                }
-            });
-
-            gameState.roomListenerUnsubscribe = unsubscribe;
-        }
-
-    } catch (error) {
-        console.error('❌ Erro ao reiniciar jogo:', error);
-    } finally {
-        gameState.isProcessing = false;
+    if (gameState.role === nextSetter) {
+        showScreen('setWordScreen');
+        document.getElementById('wordInput').value = '';
+    } else {
+        showScreen('gameScreen');
+        renderWaitingForWord();
     }
+
+} catch (e) {
+    console.log(e);
 }
+
+gameState.isProcessing = false;
 
 
 
