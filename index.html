@@ -1142,7 +1142,14 @@
             createdAt: Date.now()
         });
 
-        onDisconnect(roomRef).remove();
+        // Não remover a sala automaticamente ao sair
+// Host ficará online
+await update(roomRef, {
+    host: {
+        ...gameState.host,
+        online: true
+    }
+});
 
         document.getElementById('displayRoomId').textContent = gameState.roomId;
         showScreen('waitingRoomScreen');
@@ -1614,52 +1621,50 @@
     try {
         console.log('🔄 Iniciando nova rodada');
         
-        if (gameState.role === 'guest') {
-            // Guest define a palavra
-            await update(roomRef, {
-                status: 'settingWordGuest',
-                word: null,
-                maskedWord: [],
-                guessedLetters: [],
-                mistakes: 0,
-                winner: null
-            });
+        // Alternar status de quem define a palavra
+        const newStatus = (gameState.role === 'host') ? 'settingWordGuest' : 'settingWordHost';
+        
+        await update(roomRef, {
+            status: newStatus,
+            word: null,
+            maskedWord: [],
+            guessedLetters: [],
+            mistakes: 0,
+            winner: null
+        });
 
-            cleanupListeners();
-            showScreen('setWordScreen');
-            document.getElementById('wordInput').value = '';
-            document.getElementById('wordInput').focus();
-            
-        } else {
+        cleanupListeners();
+        
+        if (gameState.role === 'host') {
             // Host aguarda guest definir palavra
-            await update(roomRef, {
-                status: 'waitingForGuest',
-                word: null,
-                maskedWord: [],
-                guessedLetters: [],
-                mistakes: 0,
-                winner: null
-            });
-
             showScreen('gameScreen');
             renderWaitingForWord();
 
-            // Listener para aguardar palavra do guest
             const unsubscribe = onValue(roomRef, (snapshot) => {
                 const data = snapshot.val();
                 if (data && data.status === 'playing' && data.word) {
                     console.log('✅ Palavra definida pelo guest, jogo iniciado');
-                    startGameListeners(); // inicia os listeners do jogo
-                    gameState.roomListenerUnsubscribe = unsubscribe;
+                    cleanupListeners();
+                    startGameListeners();
                 }
             });
+
+            gameState.roomListenerUnsubscribe = unsubscribe;
+
+        } else {
+            // Guest define palavra
+            showScreen('setWordScreen');
+            document.getElementById('wordInput').value = '';
+            document.getElementById('wordInput').focus();
         }
+
     } catch (error) {
         console.error('❌ Erro ao reiniciar jogo:', error);
     } finally {
         gameState.isProcessing = false;
     }
 }
+
 
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
@@ -1709,16 +1714,18 @@
             cleanupListeners();
             
             if (gameState.roomId) {
-                try {
-                    const roomRef = ref(database, `rooms/${gameState.roomId}`);
-                    await remove(roomRef);
-                    
-                    const chatRef = ref(database, `chats/${gameState.roomId}`);
-                    await remove(chatRef);
-                } catch (error) {
-                    console.error('❌ Erro ao sair da sala:', error);
-                }
-            }
+    try {
+        const roomRef = ref(database, `rooms/${gameState.roomId}`);
+        // Apenas marcar jogador offline
+        if (gameState.role === 'host') {
+            await update(roomRef, { 'host/online': false });
+        } else if (gameState.role === 'guest') {
+            await update(roomRef, { 'guest/online': false });
+        }
+    } catch (error) {
+        console.error('❌ Erro ao atualizar status de saída:', error);
+    }
+}
             returnToHome();
         }
 
